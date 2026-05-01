@@ -1,0 +1,275 @@
+==============================================================
+TUTORIAL PENGGUNAAN — QA AUTOMATION HUB
+Versi: Docker + Jenkins + Playwright Integration
+Update: 2026-04-30
+==============================================================
+
+1. MENJALANKAN APLIKASI
+-----------------------
+Aplikasi berjalan via Docker Compose.
+
+Dari folder utama, jalankan:
+
+  cd "C:\Users\faishaltsq\Documents\Kerjaan\WebQA"
+  docker compose up -d
+
+Buka browser dan akses:
+
+  http://localhost:3000        → QA Automation Hub (Next.js)
+  http://localhost:8080/jenkins → Jenkins CI Server
+
+Kredensial Jenkins:
+  Username: admin
+  Password: admin
+
+Tidak ada login di Next.js — bisa langsung digunakan.
+
+
+2. ARITEKTUR SISTEM
+-------------------
+┌─────────────┐     ┌─────────────┐     ┌─────────────────────┐
+│  Next.js    │────▶│  Jenkins    │────▶│  Playwright Runner  │
+│  (Frontend) │     │  (CI/CD)    │     │  (Docker Container)  │
+│  Port 3000  │     │  Port 8080  │     │                     │
+└─────────────┘     └─────────────┘     └─────────────────────┘
+      │                   │                      │
+      │                   │                      │
+      ▼                   ▼                      ▼
+  http://localhost   http://jenkins:8080    /data/automation
+  /api/history      /job/run-               (scripts volume)
+  /api/run          playwright-script        /data/reports
+  /api/logs                                  (reports volume)
+  /api/scripts
+  /api/reports
+
+
+3. MENU NAVIGASI (Sidebar Kiri)
+-------------------------------
+  Dashboard  → /dashboard   (halaman utama)
+  Scripts    → /scripts     (daftar script automation)
+  History    → /history      (riwayat semua run)
+
+
+4. HALAMAN DASHBOARD (/dashboard)
+----------------------------------
+Halaman utama dengan ringkasan statistik:
+  - Total builds
+  - Success rate
+  - Recent activity
+
+
+5. HALAMAN SCRIPTS (/scripts)
+------------------------------
+Daftar semua script Playwright dibaca dari volume Docker:
+  automation_scripts:/data/automation
+
+Script dikelompokkan per folder:
+  - root              → /data/automation/tests/
+  - learning-course   → /data/automation/tests/learning-course/
+  - okr               → /data/automation/tests/okr/
+
+5a. Mencari Script
+    Ketik di search bar untuk filter berdasarkan nama file.
+    Filter berjalan real-time.
+
+5b. Menjalankan Script
+     1. Klik tombol "Run" di baris script.
+     2. Browser otomatis pindah ke halaman Live Log Viewer.
+
+     CATATAN: Halaman Scripts disable tombol lain saat ada
+     script yang sedang running.
+
+5c. Upload Script Baru
+     1. Klik tombol "Upload Script" di kanan atas halaman.
+     2. Pilih folder tujuan (root, learning-course, okr, dll).
+     3. Pilih file .spec.ts dari komputer.
+     4. File langsung ter-upload dan tersimpan di Docker volume.
+
+     CATATAN: Hanya file .spec.ts yang diizinkan.
+     Script tersimpan di: /data/automation/tests/{folder}/
+
+
+6. HALAMAN LIVE LOG VIEWER (/run/[buildId])
+--------------------------------------------
+Menampilkan output nyata dari proses Playwright.
+
+6a. Informasi Header
+    - Build ID     : ID unik (format: RUN-XXXXX)
+    - Status       : running / success / failure / aborted
+    - Script       : nama file yang dijalankan
+    - Timer        : elapsed time
+
+6b. Console Output
+    Log mengalir real-time (Server-Sent Events).
+    Warna:
+      Biru   = INFO / "Running"
+      Hijau  = PASSED / ✓
+      Merah  = FAILED / Error / ×
+      Kuning = WARNING
+      Abu-abu = output biasa
+
+    Auto-scroll ke baris terbaru.
+
+6c. Tombol Abort
+    Muncul saat status "running".
+    Klik untuk menghentikan proses.
+
+6d. Tombol View Report
+    Muncul setelah build selesai (status: success/failure/aborted).
+    Klik untuk melihat HTML Report di tab baru.
+
+
+7. HALAMAN HISTORY (/history)
+-----------------------------
+Menampilkan tabel riwayat semua run dari Jenkins.
+
+Kolom:
+  - Build ID    : RUN-XXX (link ke detail)
+  - Script      : nama file yang dijalankan
+  - Status      : success / failure / running
+  - Environment : Staging / Production / Dev
+  - Browser     : chromium
+  - Duration    : waktu eksekusi
+  - Date        : waktu mulai
+  - Actions     : Logs / Report / Jenkins
+
+Aksi per row:
+  - Logs     → ke halaman Live Log Viewer (/run/RUN-XXX)
+  - Report   → ke halaman Report Viewer (/reports/RUN-XXX)
+  - Jenkins  → buka build di Jenkins (tab baru)
+
+
+8. HALAMAN REPORT VIEWER (/reports/[buildId])
+----------------------------------------------
+Menampilkan HTML Report dari Playwright.
+
+Setiap build memiliki report unique karena:
+  - BUILD_NUMBER dikirim ke Docker container
+  - Report disimpan per-build: /data/reports/playwright-html/{BUILD_NUMBER}/
+
+Komponen:
+  - Header dengan Build ID dan badge status
+  - Tombol Back ke History
+  - Tombol Jenkins untuk buka build asli
+  - iframe dengan HTML report (Playwright HTML output)
+
+CATATAN: Report HTML di-generate oleh Playwright reporter.
+
+
+9. MENJALANKAN SCRIPT DARI JENKINS
+------------------------------------
+Selain dari UI, script bisa dijalankan langsung dari Jenkins:
+
+1. Buka http://localhost:8080/jenkins
+2. Login dengan admin/admin
+3. Klik job "run-playwright-script"
+4. Klik "Build with Parameters"
+5. Isi parameter:
+   - SCRIPT_PATH : nama file (contoh: dashboard.spec.ts)
+   - BROWSER     : chromium / firefox
+   - BASE_URL    : URL target (contoh: https://hris-staging.kantorku.id/)
+6. Klik "Build"
+
+
+10. MENGHENTIKAN DOCKER CONTAINER
+---------------------------------
+  docker compose down          → stop container (data tetap)
+  docker compose down -v       → stop + hapus volume (data hilang)
+  docker compose restart       → restart semua container
+  docker compose build         → rebuild image
+  docker compose build --no-cache → rebuild tanpa cache
+
+
+11. STORAGE & DATA
+------------------
+Script dan Report disimpan di Docker volumes:
+
+Volume: webqa_automation_scripts
+  - Path di container: /data/automation/tests/
+  - Berisi: script .spec.ts
+
+Volume: webqa_reports_data
+  - Path di container: /data/reports/
+  - Berisi: playwright-html/{BUILD_NUMBER}/index.html
+
+CATATAN: volumes tidak tersimpan di folder lokal project.
+Untuk persist ke lokal, ubah docker-compose.yml:
+  - automation_scripts:/data/automation
+ 改为:
+  - ./automation-scripts:/data/automation
+
+
+12. TROUBLESHOOTING
+-------------------
+
+Q: Build gagal dengan error "No such container"?
+A: Playwright runner image belum di-build. Jalankan:
+     docker build -t playwright-runner:latest ./playwright-runner
+
+Q: History tidak menampilkan script?
+A: Cek apakah Jenkins sudah berjalan. Cek dengan:
+     docker ps
+
+Q: Report button menampilkan konten yang sama untuk semua build?
+A: Pastikan Jenkins job sudah memiliki BUILD_NUMBER di command docker.
+   Cek config.xml di Jenkins job, atau restart Jenkins:
+     docker compose restart jenkins
+
+Q: Log SSE tidak update?
+A: Refresh halaman. SSE reconnect otomatis.
+
+Q: Upload script gagal?
+A: Pastikan file berekstensi .spec.ts
+   Cek apakah volume automation_scripts sudah ter-mount dengan benar.
+
+Q: Jenkin job tidak berjalan?
+A: Restart Jenkins container:
+     docker compose restart jenkins
+
+
+13. STATUS FITUR
+---------------
+Sudah fungsional:
+  [x] Load script dari filesystem (Docker volume)
+  [x] Jalankan script via UI Dashboard
+  [x] Stream log real-time ke browser (SSE)
+  [x] Abort run yang sedang berjalan
+  [x] Status badge auto-update
+  [x] Timer elapsed
+  [x] Search/filter script
+  [x] History terhubung ke Jenkins (real data)
+  [x] Report viewer dengan iframe (Playwright HTML)
+  [x] Link ke Jenkins build
+  [x] Docker + Jenkins + Playwright pipeline
+  [x] Upload script baru dari browser
+  [x] Jenkins button di History (buka build di tab baru)
+  [x] View Report button di Run page (setelah selesai)
+  [x] Per-build report storage (BUILD_NUMBER)
+
+Belum diimplementasi:
+  [ ] Allure Report integration
+  [ ] Authentication/Login
+  [ ] Database untuk persistent storage
+  [ ] Script versioning / git integration
+
+
+14. PANDUAN CEPAT
+----------------
+1. Jalankan aplikasi: docker compose up -d
+2. Buka http://localhost:3000
+3. Ke halaman Scripts
+4. Klik "Run" pada script yang diinginkan
+5. Watch live logs
+6. Cek History untuk hasil
+7. Klik "Report" untuk melihat hasil HTML
+
+
+UNTUK UPLOAD SCRIPT BARU:
+1. Klik "Upload Script" di halaman Scripts
+2. Pilih folder dan file .spec.ts
+3. Script baru muncul di daftar
+
+
+==============================================================
+QA AUTOMATION HUB — Docker + Jenkins + Playwright Integration
+==============================================================

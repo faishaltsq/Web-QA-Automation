@@ -1,0 +1,421 @@
+==============================================================
+TOOLS & ARSITEKTUR — QA AUTOMATION HUB
+Update: 2026-04-30
+==============================================================
+
+1. OVERVIEW
+-----------
+QA Automation Hub adalah sistem CI/CD untuk menjalankan automated
+test menggunakan Playwright, dengan interface web berbasis Next.js
+dan Jenkins sebagai orchestrator.
+
+
+2. TOOLS YANG DIGUNAKAN
+-----------------------
+
+┌─────────────────────────────────────────────────────────────────┐
+│  TOOL              │  VERSI      │  PORT    │  FUNGSI        │
+├───────────────────┼─────────────┼──────────┼─────────────────┤
+│  Next.js          │  16.x       │  3000    │  Frontend GUI   │
+│  Jenkins          │  2.555.x    │  8080    │  CI/CD Server   │
+│  Playwright       │  1.x        │  -       │  Test Runner    │
+│  Docker           │  -          │  -       │  Container      │
+│  Docker Compose   │  2.x        │  -       │  Orchestration  │
+└─────────────────────────────────────────────────────────────────┘
+
+
+3. DETAIL PER TOOL
+------------------
+
+3.1 NEXT.JS (FRONTEND)
+Port: 3000
+Path: C:\Users\faishaltsq\Documents\Kerjaan\WebQA\frontend\
+
+Fungsi:
+  - Interface GUI untuk user
+  - Upload script automation
+  - Trigger build ke Jenkins
+  - Lihat history dan report
+  - Stream log real-time
+
+API Endpoints:
+  POST /api/run          → Trigger Jenkins build
+  GET  /api/history      → Ambil daftar build dari Jenkins
+  GET  /api/logs/[id]    → Stream log via SSE
+  POST /api/scripts/upload → Upload file .spec.ts
+  GET  /api/scripts       → List semua script
+  GET  /api/reports/[id] → Ambil HTML report
+
+
+3.2 JENKINS (CI/CD SERVER)
+Port: 8080 (http://localhost:8080/jenkins)
+Path: C:\Users\faishaltsq\Documents\Kerjaan\WebQA\jenkins\
+
+Fungsi:
+  - Menerima build request dari Next.js
+  - Menyimpan job configuration
+  - Eksekusi Docker container untuk test
+  - Archive artifact (HTML report)
+
+Job: run-playwright-script
+Parameters:
+  - SCRIPT_PATH  : Path ke script (contoh: dashboard.spec.ts)
+  - BROWSER      : chromium / firefox (default: chromium)
+  - BASE_URL     : URL target test (contoh: https://hris-staging.kantorku.id/)
+  - BUILD_NUMBER : Nomor build Jenkins (auto-generated)
+
+Kredensial:
+  Username: admin
+  Password: admin
+
+
+3.3 PLAYWRIGHT RUNNER (DOCKER CONTAINER)
+Image: playwright-runner:latest
+Path: C:\Users\faishaltsq\Documents\Kerjaan\WebQA\playwright-runner\
+
+Fungsi:
+  - Eksekusi Playwright test berdasarkan script
+  - Generate HTML report
+  - Simpan report ke Docker volume
+
+Environment Variables (diterima dari Jenkins):
+  - SCRIPT_PATH   → Script yang akan dijalankan
+  - BROWSER       → Browser yang digunakan
+  - BASE_URL      → Target aplikasi untuk test
+  - BUILD_NUMBER  → Untuk folder report unique
+
+Command yang dijalankan:
+  npx playwright test $SCRIPT_PATH \
+    --reporter=list,html \
+    --project=$BROWSER \
+    --timeout=60000
+
+
+3.4 DOCKER & DOCKER COMPOSE
+Fungsi:
+  - Containerize semua services
+  - Volume management untuk persistent data
+  - Network untuk komunikasi antar container
+
+Network: webqa_qa-hub-network (bridge driver)
+
+
+4. DOCKER VOLUMES (STORAGE)
+---------------------------
+
+┌─────────────────────────────────────────────────────────────────┐
+│  VOLUME NAME           │  PATH IN CONTAINER   │  KETERANGAN    │
+├────────────────────────┼─────────────────────┼────────────────┤
+│  automation_scripts    │  /data/automation   │  Script .ts    │
+│  reports_data          │  /data/reports      │  HTML Report   │
+│  jenkins_home          │  /var/jenkins_home  │  Jenkins data  │
+└─────────────────────────────────────────────────────────────────┘
+
+STRUCTURE DALAM VOLUME:
+
+/data/automation/
+├── tests/
+│   ├── dashboard.spec.ts
+│   ├── auth.setup.ts
+│   ├── learning-course/
+│   │   ├── course-crud.spec.ts
+│   │   ├── course-list.spec.ts
+│   │   └── course-create-materials.spec.ts
+│   └── okr/
+│       ├── okr.spec.ts
+│       └── okr-create.spec.ts
+
+/data/reports/
+└── playwright-html/
+    ├── 1/           ← BUILD_NUMBER=1
+    │   └── index.html
+    ├── 2/           ← BUILD_NUMBER=2
+    │   └── index.html
+    ├── 3/           ← BUILD_NUMBER=3
+    │   └── index.html
+    └── ... (setiap build punya folder sendiri)
+
+
+5. DATA FLOW (ALUR KERJA)
+-------------------------
+
+┌─────────────────────────────────────────────────────────────────┐
+│  1. UPLOAD SCRIPT                                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  User → Website → Upload File                                   │
+│              │                                                  │
+│              ▼                                                  │
+│         /api/scripts/upload                                     │
+│              │                                                  │
+│              ▼                                                  │
+│         Docker Volume: /data/automation/tests/                    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  2. TRIGGER BUILD                                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  User → Klik "Run" di Website                                  │
+│              │                                                  │
+│              ▼                                                  │
+│         POST /api/run { script: "dashboard.spec.ts" }           │
+│              │                                                  │
+│              ▼                                                  │
+│         Jenkins API: /job/run-playwright-script/buildWithParams   │
+│              │                                                  │
+│              ▼                                                  │
+│         Jenkins Job Created                                      │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  3. EXECUTE TEST                                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Jenkins execute shell command:                                 │
+│  docker run --rm                                               │
+│    -v automation_scripts:/data/automation                       │
+│    -v reports_data:/data/reports                                │
+│    -e SCRIPT_PATH=dashboard.spec.ts                             │
+│    -e BROWSER=chromium                                         │
+│    -e BASE_URL=https://hris-staging.kantorku.id/               │
+│    -e BUILD_NUMBER=42                                            │
+│    playwright-runner:latest                                     │
+│                                                                  │
+│              │                                                  │
+│              ▼                                                  │
+│         Container execute:                                       │
+│         npx playwright test /data/automation/tests/              │
+│                         dashboard.spec.ts                         │
+│           --reporter=list,html                                  │
+│           --project=chromium                                    │
+│                                                                  │
+│              │                                                  │
+│              ▼                                                  │
+│         Report saved to:                                        │
+│         /data/reports/playwright-html/42/index.html             │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  4. VIEW RESULT                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  User → Buka /history                                           │
+│              │                                                  │
+│              ▼                                                  │
+│         GET /api/history → List semua build dari Jenkins        │
+│                                                                  │
+│  User → Klik "Report"                                           │
+│              │                                                  │
+│              ▼                                                  │
+│         /reports/RUN-42 → iframe dengan HTML report              │
+│         /api/reports/RUN-42?file=index.html                     │
+│                                                                  │
+│  User → Klik "Jenkins"                                          │
+│              │                                                  │
+│              ▼                                                  │
+│         http://localhost:8080/jenkins/job/run-playwright-script/ │
+│         42/                                                     │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+
+6. DOCKER COMPOSE CONFIG
+------------------------
+
+File: C:\Users\faishaltsq\Documents\Kerjaan\WebQA\docker-compose.yml
+
+version: '3.8'
+
+services:
+  nextjs:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - JENKINS_URL=http://jenkins:8080/jenkins
+      - JENKINS_USER=admin
+      - JENKINS_PASS=admin
+    volumes:
+      - ./frontend:/app              # kode Next.js (hot reload)
+      - /app/node_modules
+      - /app/.next
+      - automation_scripts:/data/automation
+      - reports_data:/data/reports
+    networks:
+      - qa-hub-network
+
+  jenkins:
+    build: ./jenkins
+    ports:
+      - "8080:8080"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - automation_scripts:/data/automation   # share dengan nextjs
+      - reports_data:/data/reports            # share dengan nextjs
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - JENKINS_OPTS=--prefix=/jenkins
+    networks:
+      - qa-hub-network
+
+volumes:
+  jenkins_home:
+  automation_scripts:    # Named volume
+  reports_data:          # Named volume
+
+networks:
+  qa-hub-network:
+    driver: bridge
+
+
+7. STORAGE LOCATION
+-------------------
+
+DEFAULT (Named Volumes):
+  Windows: C:\ProgramData\Docker\volumes\
+  Linux:   /var/lib/docker/volumes/
+
+Cek lokasi volume:
+  docker volume inspect webqa_automation_scripts
+  docker volume inspect webqa_reports_data
+
+Lokasi actual (dari inspect):
+  "Mountpoint": "/var/lib/docker/volumes/webqa_automation_scripts/_data"
+
+
+8. MENGUBAH KE LOCAL FOLDER (BIND MOUNT)
+----------------------------------------
+
+Jika ingin script tersimpan di folder lokal project:
+
+1. Buat folder di root project:
+   automation-scripts/
+
+2. Edit docker-compose.yml:
+
+   volumes:
+     # SEBELUM (Named Volume)
+     - automation_scripts:/data/automation
+
+     # SESUDAH (Bind Mount)
+     - ./automation-scripts:/data/automation
+
+3. Restart container:
+   docker compose down
+   docker compose up -d
+
+EFFECT:
+  Path lokal: C:\Users\faishaltsq\Documents\Kerjaan\WebQA\automation-scripts\
+  Path di container: /data/automation/tests\
+
+  File bisa dilihat langsung di Windows Explorer.
+
+
+9. NETWORK CONFIGURATION
+------------------------
+
+Container Network: webqa_qa-hub-network
+  - nextjs   → bisa akses jenkins via http://jenkins:8080
+  - jenkins  → bisa akses nextjs via http://nextjs:3000
+  - runner   → bisa akses nextjs via http://nextjs:3000
+
+Host Access:
+  - localhost:3000 → Next.js (frontend)
+  - localhost:8080 → Jenkins (CI server)
+
+
+10. FILE STRUCTURE PROJECT
+--------------------------
+
+C:\Users\faishaltsq\Documents\Kerjaan\WebQA\
+├── docker-compose.yml        # Docker orchestration
+├── frontend/                 # Next.js application
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── api/         # API routes
+│   │   │   │   ├── run/           # Trigger build
+│   │   │   │   ├── history/       # Build history
+│   │   │   │   ├── logs/          # SSE log stream
+│   │   │   │   ├── scripts/       # List/upload scripts
+│   │   │   │   └── reports/       # HTML report viewer
+│   │   │   ├── (dashboard)/       # Dashboard pages
+│   │   │   │   ├── dashboard/
+│   │   │   │   ├── scripts/
+│   │   │   │   ├── history/
+│   │   │   │   ├── run/[build_id]/
+│   │   │   │   └── reports/[buildId]/
+│   │   │   └── page.tsx
+│   │   ├── lib/             # Utilities
+│   │   │   └── run-store.ts # In-memory run storage
+│   │   └── components/      # UI components
+│   └── package.json
+├── jenkins/                 # Jenkins configuration
+│   ├── Dockerfile
+│   ├── plugins.txt          # Required plugins
+│   └── init.groovy.d/
+│       └── init.groovy      # Job auto-setup
+├── playwright-runner/        # Playwright Docker image
+│   ├── Dockerfile
+│   └── entrypoint.sh       # Container startup script
+├── automation-scripts/       # (Opsional) Local bind mount
+│   └── tests/
+│       ├── dashboard.spec.ts
+│       └── ...
+└── QA_Hub_Tutorial.txt      # User guide
+
+
+11. ENDPOINTS & CONNECTIONS
+---------------------------
+
+NEXT.JS (Port 3000)                    JENKINS (Port 8080)
+      │                                      │
+      │── POST /api/run ─────────────────────▶│ /job/run-playwright-script/
+      │                                      │   buildWithParameters
+      │                                      │
+      │◀────── GET /api/history ◀────────────│ /job/run-playwright-script/
+      │                                      │   api/json?tree=builds[...]
+      │                                      │
+      │                                      │
+      │                     DOCKER RUNNER
+      │◀────── SSE /api/logs/[id] ◀─────────│ (via Next.js proxy)
+      │                                      │
+      │◀────── GET /api/reports/[id] ◀───────│ (from volume)
+
+DOCKER NETWORK:
+  nextjs  → jenkins:8080
+  jenkins → runner (via docker socket)
+  runner  → automation_scripts:/data/automation (volume)
+  runner  → reports_data:/data/reports (volume)
+
+
+12. SECURITY NOTES
+-----------------
+
+- Jenkins tidak memiliki authentication external (berbasis container)
+- API /api/run tidak require authentication
+- Volume adalah shared storage antar containers
+- Docker socket di-mount ke Jenkins container (docker-in-docker)
+
+
+13. TROUBLESHOOTING
+-------------------
+
+Masalah: Report sama untuk semua build
+Cause: BUILD_NUMBER tidak dikirim ke container
+Solusi: Cek config.xml Jenkins job, pastikan ada -e BUILD_NUMBER
+
+Masalah: Script tidak ditemukan saat run
+Cause: Volume automation_scripts tidak ter-mount dengan benar
+Solusi: docker compose down && docker compose up -d
+
+Masalah: Cannot connect to Jenkins
+Cause: Jenkins belum selesai startup
+Solusi: Tunggu 30 detik, atau restart: docker compose restart jenkins
+
+==============================================================
+QA AUTOMATION HUB — Tools & Architecture Guide
+==============================================================

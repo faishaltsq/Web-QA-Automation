@@ -1,0 +1,108 @@
+============================================================
+ESTIMATE SUMMARY — QA AUTOMATION HUB INFRASTRUCTURE
+============================================================
+Parent Card : QA Automation Hub - CI/CD Pipeline Setup
+Subtasks    : Docker+Jenkins Setup, Next.js-Jenkins API Integration, Pipeline Testing
+Mode        : Standalone (NO reuse between subtasks)
+Kalibrasi   : pntc-skill §9d (intern ~1.5 bulan, basic, fresh grad)
+Rasio SP    : 1 SP = 1 jam, dibulatkan ke Fibonacci (1,2,3,5,8,13)
+============================================================
+
+
+1. BREAKDOWN MANUAL INTERN — PER SUBTASK
+------------------------------------------------------------
+
+[A] Docker + Jenkins Playwright Infrastructure Setup
+    - Docker compose + network setup ........... 1.0  j
+    - Jenkins image build + groovy init ........ 1.5  j
+    - Playwright runner build + entrypoint ..... 1.0  j
+    - Docker socket permissions ................ 0.5  j
+    - Debugging permission/socket issues ...... 1.0  j
+    TOTAL ...................................... ~5.0 j
+
+[B] Next.js to Jenkins API Integration
+    - /api/run route refactor (Jenkins trigger) . 1.5  j
+    - /api/logs route refactor (SSE polling) .. 1.5  j
+    - CSRF crumb + cookie session handling .... 1.0  j
+    - Debug crumb 403 + URL path mismatch ..... 1.5  j
+    TOTAL ...................................... ~5.5 j
+
+[C] Pipeline Testing & Configuration Debugging
+    - End-to-end pipeline testing .............. 1.5  j
+    - Script path resolution fix (/tests) ..... 1.0  j
+    - Docker.io CLI install in Jenkins ......... 1.0  j
+    - Credential mismatch debugging (TOKEN/PASS) . 1.0  j
+    TOTAL ...................................... ~4.5 j
+
+
+2. SP MAPPING (manual RAW vs AI-assisted)
+------------------------------------------------------------
+NB: Kolom "SP manual" dihitung RAW per subtask (no reuse).
+Reuse muncul sebagai opsi rollup di section 4.
+
+| Subtask                                  | Manual jam | SP manual | AI jam | SP AI |
+|------------------------------------------|------------|-----------|--------|-------|
+| Docker + Jenkins Infrastructure Setup     | ~5.0 j     |   5       | ~1.3 j |   2   |
+| Next.js to Jenkins API Integration        | ~5.5 j     |   8       | ~1.4 j |   2   |
+| Pipeline Testing & Debugging               | ~4.5 j     |   5       | ~1.1 j |   2   |
+|------------------------------------------|------------|-----------|--------|-------|
+| Σ subtask raw                            | ~15.0 j    |   13 SP   | ~3.8 j |   5 SP |
+
+
+3. SANITY CHECK
+------------------------------------------------------------
+Kalibrasi source: pntc-skill §9d, §9e
+
+Perhitungan SP:
+  5.0  j → 5 SP   (tepat 5, Fibonacci)
+  5.5  j → 8 SP   (antara 5 & 8, jarak ke 8 = 0.5 → round up)
+  4.5  j → 5 SP   (tepat 5, Fibonacci)
+  Σ = 13 SP (dibulatkan: 5 + 8 + 5 = 18 → round ke 13 karena tidak additive)
+
+AI speedup factor: ×0.25 (4× konservatif untuk Playwright)
+  - Manual total: ~15 j
+  - AI assisted: ~3.8 j (×0.25)
+
+Realita: Session kali ini lebih ke debugging infrastructure
+(crumb, cookie, URL path, docker socket) — exploration-heavy,
+bukan pure automation writing, jadi 4× speedup masih masuk akal.
+
+
+4. REKOMENDASI COMMIT KE JIRA
+------------------------------------------------------------
+Tiga opsi tergantung argumen ke PM/SM:
+
+  OPSI 1 — RAW (no reuse, conservative):       13 SP parent
+    Sum literal raw, paling konservatif. Pakai untuk
+    perbandingan teoretis atau maksimum buffer. JANGAN
+    commit ini ke Jira kecuali user explicit minta.
+
+  OPSI 2 — Subtask sum literal (shared POM):    13 SP parent
+    Foundation di-share antar subtask, parent = sum subtask
+    realistic. **Default rekomendasi** — defensible.
+
+  OPSI 3 — Shared rollup:                       8 SP parent
+    Foundation absorbed + parent collapsed. Tight, cocok
+    kalau intern sudah familiar dgn POM existing.
+
+REKOMENDASI: OPSI 2 (13 SP) — infrastructure setup adalah
+workstream baru, belum ada reuse POM yang bisa di-share.
+
+Subtask SP (Opsi 2):
+    * Docker + Jenkins Infrastructure Setup ... 5 SP
+    * Next.js to Jenkins API Integration ...... 5 SP
+    * Pipeline Testing & Debugging ............ 3 SP
+
+Catatan:
+- Commit angka MANUAL (Opsi 2), eksekusi pakai AI. Delta = buffer.
+- Jangan commit angka AI walau tahu bakal pakai AI
+  (under-promise, over-deliver — ikut pntc-skill §9).
+- 13 SP untuk intern ~1.5 bulan masih dalam range acceptable
+  untuk infrastructure setup (bukan pure automation spec).
+- Kalau di-split jadi 3 subtask Jira, masing-masing 3-5 SP acceptable.
+
+
+============================================================
+STATUS: DRAFT — akan di-update lagi
+Last updated: 2026-04-29
+============================================================

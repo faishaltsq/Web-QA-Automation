@@ -1,0 +1,605 @@
+=============================================================
+HANDOFF DOCUMENT — QA AUTOMATION HUB
+Dibuat: 2026-04-29
+Revised: 2026-04-29 15:00 — Gap analysis + blocker identified
+Status: Docker running, Jenkins job MISSING (init.groovy failed)
+=============================================================
+
+KONTEKS
+-------
+Ini adalah dokumen handoff untuk melanjutkan proyek ke AI lain
+(Gemini CLI, GitHub Copilot, dsb) jika terkena context limit.
+Baca seluruh dokumen ini sebelum menulis kode apapun.
+
+PERUBAHAN TERAKHIR (2026-04-29 15:00)
+-------------------------------------
+- Docker images: NEXTJS, JENKINS, PLAYWRIGHT-RUNNER semua sudah di-build
+- docker-compose up -d sudah berhasil
+- Containers running: webqa-nextjs-1, webqa-jenkins-1
+
+BLOCKER DITEMUKAN (2026-04-29 15:00):
+- Jenkins job "run-playwright-script" TIDAK ADA di /var/jenkins_home/jobs/
+- init.groovy DI-EXECUTE tapi SILENT FAIL karena API lama:
+    * hudson.tasks.junit.JUnitParser sudah tidak ada di Jenkins 2.555.1
+    * Gunakan hudson.tasks.junit.JUnitResultArchiver sebagai gantinya
+    * ArtifactArchiver constructor juga berubah (hanya 1 arg sekarang)
+- Volume webqa_automation_scripts kosong — scripts belum dicopy ke sana
+
+ARCHITECTURAL DECISION: Migrasi dari child_process.spawn langsung
+ke Jenkins + Docker untuk:
+  - Security isolation (upload script = arbitrary code execution)
+  - Job queue & retry mechanism
+  - Scalability untuk multiple concurrent runs
+  - Better hosting readiness
+
+=============================================================
+1. APA INI?
+=============================================================
+Web dashboard untuk menjalankan script automation Playwright
+langsung dari browser — tanpa perlu buka terminal.
+
+Tim QA bisa:
+  - Lihat semua script yang ada
+  - Klik "Run" → script berjalan
+  - Lihat live output/log di browser secara real-time
+  - Lihat status: passed / failed / aborted
+  - Upload script Playwright dari browser
+
+Ini BUKAN SaaS publik. Ini internal tool untuk tim QA.
+Target: bisa dihosting di VPS dengan Jenkins + Docker.
+
+=============================================================
+2. STACK TEKNOLOGI
+=============================================================
+Frontend   : Next.js 16 (App Router) + TypeScript
+UI         : TailwindCSS v4 + Shadcn (via @base-ui/react, BUKAN Radix)
+Icons      : lucide-react
+HTTP Client: fetch (native, tidak pakai axios untuk API calls)
+Execution  : Jenkins API (trigger job) + Docker container
+Streaming  : Server-Sent Events (SSE) via ReadableStream
+State      : React useState/useEffect (tidak ada Redux/Zustand)
+Auth       : BELUM ADA — sengaja di-skip untuk prioritas functional
+
+INFRASTRUCTURE:
+  - Docker: Playwright runner di container (isolation)
+  - Jenkins: Job queue, scheduling, historical logs
+  - Docker Compose: orchestrate all services
+
+PENTING — Shadcn di proyek ini BUKAN versi standard:
+  - Pakai @base-ui/react, BUKAN @radix-ui
+  - Button TIDAK punya prop "asChild" — gunakan prop "render"
+  - Contoh: <DialogTrigger render={<Button>...</Button>} />
+  - Selalu cek src/components/ui/*.tsx sebelum pakai komponen
+
+
+=============================================================
+3. ARSITEKTUR TARGET (JENKINS + DOCKER)
+=============================================================
+
+Flow:
+  Browser → Next.js API → Jenkins (trigger job) → Docker container (run Playwright)
+                                              ↓
+                                       Results + Artifacts
+                                              ↓
+                                       Allure report
+                                              ↓
+                                       Next.js SSE (live log)
+
+Services (docker-compose):
+  - nextjs   : Port 3000 (Frontend + API)
+  - jenkins  : Port 8080 (Job management) → http://localhost:8080/jenkins
+  - playwright-runner : Docker image untuk execute tests (via Jenkins)
+
+Docker Images Built:
+  - webqa-nextjs:latest      (Next.js standalone)
+  - playwright-runner:latest  (Node.js + Playwright + Chromium on Debian)
+
+Jenkins Job Configuration:
+  - Job name: run-playwright-script
+  - Trigger: via REST API (buildWithParameters)
+  - Parameter: SCRIPT_PATH, BROWSER, BASE_URL
+  - Execute: docker run --rm playwright-image npx playwright test
+  - Post-build: archive artifacts, generate Allure report
+
+
+=============================================================
+4. STRUKTUR FOLDER PROYEK
+=============================================================
+Ada TIGA folder utama yang relevan:
+
+A. FRONTEND (Next.js)
+   Path: C:\Users\faishaltsq\Documents\Kerjaan\WebQA\frontend\
+
+   src/
+     app/
+       (dashboard)/          ← semua halaman butuh sidebar
+         layout.tsx          ← wraps semua dengan AppLayout
+         dashboard/page.tsx  ← statistik + recent runs (masih mock)
+         history/page.tsx    ← tabel run history (masih mock)
+         scripts/
+           page.tsx          ← LIST scripts (SUDAH load dari API nyata)
+           [id]/page.tsx     ← detail script (masih mock content)
+         run/
+           [build_id]/
+             page.tsx        ← live log viewer (SUDAH SSE nyata)
+       login/page.tsx        ← form login (TIDAK enforce auth)
+       page.tsx              ← redirect ke /dashboard
+       api/
+         scripts/route.ts   ← GET: list .spec.ts files
+         run/route.ts        ← POST: jalankan script via Jenkins, DELETE: abort
+         logs/[runId]/route.ts ← GET: SSE stream log (dari Jenkins)
+     components/
+       layout/AppLayout.tsx  ← sidebar + header
+       ui/                   ← shadcn components (jangan diedit)
+       upload/UploadDropzone.tsx ← drag-and-drop (belum terhubung backend)
+     lib/
+       run-store.ts          ← in-memory store untuk running processes
+       utils.ts              ← cn() helper
+
+B. AUTOMATION SCRIPTS
+   Path: C:\Users\faishaltsq\Documents\Kerjaan\WebQA\Automation Kantorku\
+
+   playwright.config.ts     ← config utama Playwright
+   tests/
+     auth.setup.ts          ← login setup (buat auth/user.json)
+     dashboard.spec.ts
+     learning-course/       ← 11 spec files
+     okr/                   ← multiple spec files
+   auth/
+     user.json              ← session state (dibuat oleh auth.setup.ts)
+   pages/                   ← Page Object Model
+   fixtures/
+   utils/
+
+C. DOCKER / JENKINS SETUP
+   Path: C:\Users\faishaltsq\Documents\Kerjaan\WebQA\
+
+   docker-compose.yml       ← orchestrating nextjs + jenkins
+   frontend/Dockerfile       ← multi-stage Next.js build
+   jenkins/
+     Dockerfile             ← Jenkins LTS + plugins
+     plugins.txt            ← required plugins
+     init.groovy.d/
+       init.groovy          ← auto-create job on container start
+   playwright-runner/
+     Dockerfile             ← Node.js + Playwright + Chromium (Debian)
+     entrypoint.sh          ← script execution entry point
+
+
+=============================================================
+5. CARA KERJA SAAT INI vs TARGET
+=============================================================
+
+== SEKARANG (child_process direct - STILL ACTIVE) ==
+API routes masih spawn langsung via child_process.
+Ini akan di-refactor ke Jenkins setelah setup selesai.
+
+== TARGET (Jenkins + Docker) ==
+1. User klik "Run" → POST /api/run
+2. Next.js call Jenkins API: POST /job/run-playwright-script/build
+3. Jenkins job trigger Docker container
+4. Container execute: playwright test <script>
+5. Log dari container → Jenkins → Next.js SSE
+6. Abort: POST /api/run/delete → Jenkins API (stop build)
+
+Security benefit: Upload script = taruh di volume, bukan exec langsung.
+
+
+=============================================================
+6. STATE IMPLEMENTASI PER FITUR
+=============================================================
+
+[DONE] Halaman login (/login)
+  - Form email + password
+  - Submit → langsung redirect /dashboard (mock, no real auth)
+  - File: src/app/login/page.tsx
+
+[DONE] Dashboard (/dashboard)
+  - 4 stat cards: Total Scripts, Passed, Failed, Avg Duration
+  - Recent runs list
+  - Chart placeholder (belum ada data nyata)
+  - File: src/app/(dashboard)/dashboard/page.tsx
+  - STATUS: semua data masih HARDCODED/MOCK
+
+[DONE] Scripts List (/scripts)
+  - Load real scripts dari filesystem via /api/scripts
+  - Grouped by subfolder
+  - Search by name/folder
+  - Play button → POST /api/run → navigate ke /run/[runId]
+  - Upload dialog (UI ada, tapi upload belum ke filesystem)
+  - File: src/app/(dashboard)/scripts/page.tsx
+
+[PARTIAL] Script Detail (/scripts/[id])
+  - Ada halaman, tapi konten masih MOCK (hardcoded "login_flow.py")
+  - Belum terhubung ke script nyata
+  - Run button ada tapi tidak trigger API
+  - File: src/app/(dashboard)/scripts/[id]/page.tsx
+  - TODO: fetch konten file nyata, wire Run button ke /api/run
+
+[DONE] Live Log Viewer (/run/[build_id])
+  - Terima runId dari URL
+  - Buka EventSource ke /api/logs/[runId]
+  - Stream log real-time dengan color coding
+  - Status badge update otomatis
+  - Abort button aktif
+  - File: src/app/(dashboard)/run/[build_id]/page.tsx
+  - STATUS: saat ini masih dari child_process, nanti di-bridge dari Jenkins
+
+[PARTIAL] Run History (/history)
+  - Tabel ada, data masih HARDCODED
+  - Link "BLD-xxx" di Build ID column → navigate ke /run/[id]
+  - File: src/app/(dashboard)/history/page.tsx
+  - TODO: simpan run ke database atau in-memory, fetch dari sana
+
+[NOT DONE] Settings (/settings)
+  - Menu ada di sidebar tapi halaman belum dibuat
+
+[DONE] Docker Setup
+  - docker-compose.yml ✓
+  - Dockerfile untuk Next.js ✓
+  - Dockerfile untuk Playwright runner ✓
+  - entrypoint.sh ✓
+  - Images built: webqa-nextjs, playwright-runner ✓
+  - Containers running: nextjs (3000), jenkins (8080) ✓
+
+[IN PROGRESS] Jenkins Setup
+  - Jenkins container running ✓
+  - Job auto-create via init.groovy (belum verified working)
+  - Jenkins API integration (belum ada di Next.js API routes)
+  - Log bridging dari Jenkins ke SSE (belum ada)
+
+[NOT DONE] Backend/Database
+  - Belum ada FastAPI (removed dari compose)
+  - Belum ada database (SQLite/PostgreSQL)
+  - Run history tidak persisten (hilang kalau server restart)
+
+[NOT DONE] Auth sesungguhnya
+  - JWT belum ada
+  - Middleware proteksi route belum ada
+  - Semua halaman bisa diakses tanpa login
+
+[NOT DONE] Upload Script
+  - UI UploadDropzone sudah ada
+  - Backend: belum ada POST /api/scripts/upload
+  - Perlu: validasi .spec.ts only, save ke shared volume
+
+
+=============================================================
+7. API ROUTES YANG ADA / TARGET
+=============================================================
+
+CURRENT (child_process direct):
+GET  /api/scripts
+  Response: { scripts: [{ name, relPath, folder, sizeKb, updatedAt }] }
+  Source: rekursif walk Automation Kantorku/tests/
+
+POST /api/run
+  Body: { script: "relative/path.spec.ts", browser?: "chromium" }
+  Response: { runId: "RUN-XXXXX" }
+  Action: spawn npx playwright test (DIRECT - akan berubah)
+
+DELETE /api/run
+  Body: { runId: "RUN-XXXXX" }
+  Response: { ok: true }
+  Action: kill proses (DIRECT - akan berubah)
+
+GET  /api/logs/[runId]
+  Response: text/event-stream
+  Source: local process stdout (DIRECT - akan berubah)
+
+TARGET (Jenkins):
+POST /api/run
+  Body: { script: "relative/path.spec.ts", browser?: "chromium" }
+  Response: { runId: "RUN-XXXXX", jenkinsBuildId: "123" }
+  Action: POST ke Jenkins API → trigger Docker container job
+
+DELETE /api/run
+  Body: { runId: "RUN-XXXXX" }
+  Response: { ok: true }
+  Action: POST ke Jenkins API → abort/stop build
+
+GET  /api/logs/[runId]
+  Response: text/event-stream
+  Source: Bridge dari Jenkins build console output via SSE
+  End marker: "data: \x00STATUS:passed\n\n" (atau failed/aborted)
+
+POST /api/scripts/upload (BARU)
+  Body: multipart form dengan file .spec.ts
+  Response: { ok: true, path: "folder/script.spec.ts" }
+  Action: simpan ke shared volume (mounted ke container)
+  Validasi: ekstensi .spec.ts, max size 1MB
+
+
+=============================================================
+8. IN-MEMORY STORE (run-store.ts)
+=============================================================
+Lokasi: src/lib/run-store.ts
+
+Menimpan running processes di global variable:
+  global.__qa_runs__: Map<runId, Run>
+
+Run object berisi:
+  id           : string
+  script       : string (relative path)
+  jenkinsBuildId: string (NEW - untuk mapping ke Jenkins build)
+  logs         : string[] (semua baris log yang sudah masuk)
+  status       : "running" | "passed" | "failed" | "aborted"
+  startedAt    : Date
+  listeners    : Set<(line: string) => void> (SSE subscribers)
+
+CATATAN: Data hilang setiap kali container di-restart.
+Tidak ada persistensi saat ini.
+
+
+=============================================================
+9. HARDCODED PATHS
+=============================================================
+File: src/app/api/scripts/route.ts, baris ~5
+  const TESTS_DIR = "C:\\Users\\faishaltsq\\Documents\\Kerjaan\\WebQA\\Automation Kantorku\\tests";
+
+File: src/app/api/run/route.ts, baris ~9
+  const AUTOMATION_DIR = "C:\\Users\\faishaltsq\\Documents\\Kerjaan\\WebQA\\Automation Kantorku";
+
+DOCKER VOLUMES:
+  - automation_scripts → /data/automation (untuk scripts + config)
+  - reports_data → /data/reports (untuk Allure reports)
+
+
+=============================================================
+10. PERINTAH UNTUK MENJALANKAN (DOCKER)
+=============================================================
+
+== Start all services ==
+cd "C:\Users\faishaltsq\Documents\Kerjaan\WebQA"
+docker-compose up -d
+
+== Check status ==
+docker-compose ps
+docker logs webqa-nextjs-1 --tail 20
+docker logs webqa-jenkins-1 --tail 20
+
+== Access ==
+  - Next.js: http://localhost:3000
+  - Jenkins: http://localhost:8080/jenkins (admin/admin123)
+
+== Stop ==
+docker-compose down
+
+== Rebuild images ==
+docker-compose build
+docker build -t playwright-runner:latest ./playwright-runner
+
+
+=============================================================
+11. NEXT STEPS (PRIORITAS) — UPDATED 2026-04-29 15:00
+=============================================================
+
+=== STATUS PER FITUR (TERKINI) ===
+
+[BLOCKER] Jenkins job auto-create
+  - init.groovy GAGAL SILENT di Jenkins 2.555.1
+  - /var/jenkins_home/jobs/ KOSONG
+  - FIX: Ganti init.groovy dengan versi yang benar (lihat Step 1 di bawah)
+
+[BLOCKER] Automation scripts volume kosong
+  - webqa_automation_scripts belum berisi file apapun
+  - FIX: Step 2 di bawah
+
+[PENDING] /api/run → masih child_process, belum Jenkins
+[PENDING] /api/logs → masih local process, belum Jenkins console bridge
+[PARTIAL] /scripts/[id] → konten mock, Run button tidak trigger API
+[PARTIAL] /history → data hardcoded, tidak persisten
+[NOT DONE] POST /api/scripts/upload → UI ada, backend tidak ada
+[NOT DONE] /settings page → menu ada, halaman belum dibuat
+[NOT DONE] SQLite untuk run history persistence
+
+=== URUTAN PENGERJAAN ===
+
+--- STEP 1: FIX init.groovy (PALING KRITIS) ---
+File: C:\Users\faishaltsq\Documents\Kerjaan\WebQA\jenkins\init.groovy.d\init.groovy
+
+Ganti isi file dengan ini (sudah disesuaikan dengan Jenkins 2.555.1):
+
+```groovy
+import jenkins.model.*
+import hudson.model.*
+import hudson.tasks.*
+
+def jenkins = Jenkins.getInstance()
+def jobName = "run-playwright-script"
+def job = jenkins.getItem(jobName)
+
+if (job == null) {
+    job = jenkins.createProject(FreeStyleProject.class, jobName)
+}
+
+job.setDescription("Run Playwright automation script in Docker container")
+
+job.removeProperty(ParametersDefinitionProperty.class)
+job.addProperty(new ParametersDefinitionProperty([
+    new StringParameterDefinition("SCRIPT_PATH", "", "Relative path to spec file in /data/automation"),
+    new StringParameterDefinition("BROWSER", "chromium", "Browser to use"),
+    new StringParameterDefinition("BASE_URL", "http://nextjs:3000", "Base URL for tests")
+]))
+
+job.getBuildersList().clear()
+job.getBuildersList().add(new Shell('''
+docker run --rm \
+  --network webqa_qa-hub-network \
+  -v webqa_automation_scripts:/data/automation \
+  -v webqa_reports_data:/data/reports \
+  -e SCRIPT_PATH="${SCRIPT_PATH}" \
+  -e BROWSER="${BROWSER}" \
+  -e BASE_URL="${BASE_URL}" \
+  playwright-runner:latest
+'''))
+
+def archiver = new ArtifactArchiver("**/test-results/**, **/*.json")
+archiver.setAllowEmptyArchive(true)
+job.getPublishersList().clear()
+job.getPublishersList().add(archiver)
+
+job.save()
+println "Job '${jobName}' configured successfully"
+```
+
+Setelah edit file:
+  docker-compose build jenkins
+  docker-compose up -d jenkins
+  Verify: docker exec webqa-jenkins-1 bash -c "ls /var/jenkins_home/jobs/"
+  Harusnya muncul: run-playwright-script
+
+--- STEP 2: Copy Automation Scripts ke Volume ---
+
+  docker run --rm \
+    -v "C:\Users\faishaltsq\Documents\Kerjaan\WebQA\Automation Kantorku":/src:ro \
+    -v webqa_automation_scripts:/data/automation \
+    alpine sh -c "cp -r /src/. /data/automation/"
+
+  Verify:
+  docker exec webqa-jenkins-1 ls /data/automation/tests/
+
+--- STEP 3: Test Jenkins API Manual ---
+
+  docker exec webqa-jenkins-1 curl -s \
+    -X POST "http://admin:admin123@localhost:8080/jenkins/job/run-playwright-script/buildWithParameters" \
+    --data-urlencode "SCRIPT_PATH=tests/dashboard.spec.ts" \
+    --data-urlencode "BASE_URL=https://hris.kantorku.id"
+
+  Cek build: http://localhost:8080/jenkins/job/run-playwright-script/lastBuild/console
+
+--- STEP 4: Refactor /api/run → Jenkins ---
+File: frontend/src/app/api/run/route.ts
+
+Ganti spawn() dengan fetch ke Jenkins API:
+
+```typescript
+const JENKINS_URL = process.env.JENKINS_URL || "http://jenkins:8080";
+const JENKINS_USER = process.env.JENKINS_USER || "admin";
+const JENKINS_TOKEN = process.env.JENKINS_TOKEN || "admin123";
+const JOB_NAME = "run-playwright-script";
+
+// POST handler
+const runId = makeId();
+const jenkinsRes = await fetch(
+  `${JENKINS_URL}/jenkins/job/${JOB_NAME}/buildWithParameters`,
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${JENKINS_USER}:${JENKINS_TOKEN}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      SCRIPT_PATH: `tests/${script}`,
+      BROWSER: browser,
+      BASE_URL: process.env.TARGET_BASE_URL || "https://hris.kantorku.id",
+    }),
+  }
+);
+
+// Jenkins returns 201 + Location header dengan queue URL
+const queueUrl = jenkinsRes.headers.get("Location");
+// Poll queue URL untuk dapat build number
+// Simpan mapping runId → jenkinsBuildNumber di run-store
+```
+
+--- STEP 5: Refactor /api/logs → Jenkins Console Bridge ---
+File: frontend/src/app/api/logs/[runId]/route.ts
+
+Poll Jenkins build console secara periodik dan forward ke SSE:
+
+```typescript
+// Pattern: poll /jenkins/job/JOB/BUILD_NUM/logText/progressiveText?start=0
+// Parameter "start" adalah byte offset, naik setiap request
+// Header X-Text-Size = total size, X-More-Data = true/false (masih running)
+let start = 0;
+while (true) {
+  const res = await fetch(
+    `${JENKINS_URL}/jenkins/job/${JOB_NAME}/${buildNum}/logText/progressiveText?start=${start}`,
+    { headers: { Authorization: ... } }
+  );
+  const text = await res.text();
+  start = parseInt(res.headers.get("X-Text-Size") || "0");
+  const more = res.headers.get("X-More-Data") === "true";
+  // kirim lines ke SSE client
+  if (!more) break;
+  await new Promise(r => setTimeout(r, 1000)); // poll tiap 1 detik
+}
+```
+
+--- STEP 6: Upload Endpoint ---
+File: frontend/src/app/api/scripts/upload/route.ts (BARU)
+
+```typescript
+import { writeFile } from "fs/promises";
+import path from "path";
+
+export async function POST(request: NextRequest) {
+  const formData = await request.formData();
+  const file = formData.get("file") as File;
+  if (!file?.name.endsWith(".spec.ts"))
+    return NextResponse.json({ error: "Only .spec.ts files allowed" }, { status: 400 });
+  if (file.size > 1_048_576)
+    return NextResponse.json({ error: "Max 1MB" }, { status: 400 });
+
+  const targetDir = process.env.AUTOMATION_DIR || "/data/automation/tests";
+  const filePath = path.join(targetDir, file.name);
+  await writeFile(filePath, Buffer.from(await file.arrayBuffer()));
+  return NextResponse.json({ ok: true, path: file.name });
+}
+```
+
+--- STEP 7: Settings Page (LOW PRIORITY) ---
+File: frontend/src/app/(dashboard)/settings/page.tsx (BARU)
+Buat halaman sederhana dengan form: Jenkins URL, Target Base URL, default browser.
+Simpan ke localStorage dulu (bukan database), baca saat trigger run.
+
+
+=============================================================
+12. CATATAN KHUSUS UNTUK AI YANG MELANJUTKAN
+=============================================================
+1. JANGAN install package baru tanpa perlu. Banyak yang sudah ada
+   (axios, recharts, @monaco-editor/react, date-fns).
+
+2. Shadcn di proyek ini pakai @base-ui/react, BUKAN Radix.
+   Sebelum pakai komponen UI apapun, baca dulu file-nya di
+   src/components/ui/. Button tidak punya "asChild", pakai "render".
+
+3. Jangan buat auth dulu — user minta skip, prioritas functional.
+
+4. Path Windows pakai backslash ganda dalam string JS:
+   "C:\\Users\\..." bukan "C:/Users/..."
+   Atau gunakan path.join() yang handle ini otomatis.
+
+5. Next.js versi ini adalah 16.2.4 (bukan 13/14/15 yang umum di
+   training data). Beberapa API mungkin berbeda. Kalau ragu,
+   cek node_modules/next/dist/docs/ dulu.
+
+6. TypeScript strict mode aktif. Selalu jalankan:
+   npx tsc --noEmit
+   setelah menulis kode untuk cek error.
+
+7. Playwright config di Automation Kantorku punya "setup" project
+   yang harus jalan dulu (buat auth/user.json). Ini otomatis
+   karena chromium project punya dependencies: ['setup'].
+   NOTE: Auth file akan ada di /data/automation/auth/user.json
+
+8. Docker network: semua service harus ada di同一 docker-compose
+   network agar bisa saling communicate. Jenkins API accessible
+   dari Next.js container via hostname: jenkins:8080
+
+9. Jenkins Security: pakai API token, bukan username/password
+   di code. Generate dari Jenkins UI > Profile > API Token.
+   Default credentials: admin/admin123
+
+10. Playwright runner image pakai Debian base (node:20-bookworm)
+    karena Alpine tidak compatible dengan playwright install --with-deps
+
+11. Next.js standalone mode warning: "pnpm start" does not work with
+    output standalone. Need to use "node .next/standalone/server.js"
+    Ini masih jalan tapi ada warning.
+
+12. Automation scripts harus dicopy ke volume automation_scripts
+    sebelum bisa di-run oleh Jenkins. Volume initially empty.
+
+=============================================================

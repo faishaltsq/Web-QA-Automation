@@ -1,0 +1,8 @@
+docker-plugin
+docker-workflow
+workflow-aggregator
+git
+ws-cleanup
+allure-jenkins-plugin
+parameterized-scheduler
+job-dsl

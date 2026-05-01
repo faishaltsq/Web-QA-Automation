@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  nextjs:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3000
+      - JENKINS_URL=http://jenkins:8080/jenkins
+      - JENKINS_USER=admin
+      - JENKINS_PASS=admin
+      - AUTOMATION_DIR=/data/automation
+      - TARGET_APP_URL=https://hris-staging.kantorku.id/
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+      - automation_scripts:/data/automation
+      - reports_data:/data/reports
+    depends_on:
+      - jenkins
+    networks:
+      - qa-hub-network
+
+  jenkins:
+    build:
+      context: ./jenkins
+    ports:
+      - "8080:8080"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - reports_data:/data/reports
+      - automation_scripts:/data/automation
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "0"
+    environment:
+      - JENKINS_OPTS=--prefix=/jenkins
+      - JENKINS_ADMIN_USERNAME=admin
+      - JENKINS_ADMIN_PASSWORD=admin123
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    networks:
+      - qa-hub-network
+
+  playwright-runner:
+    build:
+      context: ./playwright-runner
+    volumes:
+      - automation_scripts:/data/automation
+      - reports_data:/data/reports
+    networks:
+      - qa-hub-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+volumes:
+  jenkins_home:
+  automation_scripts:
+  reports_data:
+
+networks:
+  qa-hub-network:
+    driver: bridge

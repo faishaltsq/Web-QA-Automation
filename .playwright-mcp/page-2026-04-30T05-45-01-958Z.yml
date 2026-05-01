@@ -1,0 +1,41 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]: QA
+        - generic [ref=e6]: Automation Hub
+      - navigation [ref=e7]:
+        - link "Dashboard" [ref=e8] [cursor=pointer]:
+          - /url: /dashboard
+          - img [ref=e9]
+          - text: Dashboard
+        - link "Scripts" [ref=e14] [cursor=pointer]:
+          - /url: /scripts
+          - img [ref=e15]
+          - text: Scripts
+        - link "History" [ref=e20] [cursor=pointer]:
+          - /url: /history
+          - img [ref=e21]
+          - text: History
+    - main [ref=e25]:
+      - generic [ref=e27]:
+        - generic [ref=e28]:
+          - generic [ref=e29]:
+            - heading "Run History" [level=1] [ref=e30]
+            - paragraph [ref=e31]: Full record of all script executions
+          - generic [ref=e32]:
+            - button "Auto Refresh ON" [ref=e33]:
+              - img
+              - text: Auto Refresh ON
+            - button "Refresh" [disabled]:
+              - img
+              - text: Refresh
+        - generic [ref=e34]:
+          - generic [ref=e35]:
+            - img [ref=e36]
+            - textbox "Search by script, env, or ID..." [ref=e39]
+          - generic [ref=e40]:
+            - button "Filters" [disabled]:
+              - img
+              - text: Filters
+  - alert [ref=e41]

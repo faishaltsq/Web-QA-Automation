@@ -1,0 +1,787 @@
+================================================================================
+                  QA AUTOMATION HUB - CLOUD DEPLOYMENT GUIDE
+================================================================================
+
+Prerequisites:
+- Cloud VM (AWS EC2 / GCP Compute Engine / Azure VM) dengan Ubuntu 22.04
+- Docker & Docker Compose installed
+- Domain name dengan DNS configured
+- SSL certificate (Let's Encrypt / Cloudflare)
+
+================================================================================
+                          SECTION 1: ARCHITECTURE OVERVIEW
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CLOUD DEPLOYMENT                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│    ┌──────────────┐         ┌──────────────┐         ┌──────────────┐     │
+│    │   USERS      │         │   CLOUDFLARE │         │   CDN/SSL    │     │
+│    │  (Browser)   │────────▶│     CDN       │────────▶│  Termination │     │
+│    └──────────────┘         └──────────────┘         └──────┬───────┘     │
+│                                                              │              │
+│                                                              ▼              │
+│    ┌──────────────────────────────────────────────────────────────────┐   │
+│    │                         VPC / PRIVATE NETWORK                     │   │
+│    │  ┌────────────────┐    ┌────────────────┐    ┌────────────────┐   │   │
+│    │  │  NEXT.JS APP  │    │    JENKINS     │    │  PLAYWRIGHT    │   │   │
+│    │  │  (Port 3000)   │    │   (Port 8080)  │    │    RUNNER      │   │   │
+│    │  │                │    │                │    │  (Ephemeral)   │   │   │
+│    │  │ - QA Hub UI    │    │ - Job Config   │    │                │   │   │
+│    │  │ - Run Scripts  │    │ - Trigger Builds│   │ - Run Tests   │   │   │
+│    │  │ - View Reports │    │ - Store Reports │   │ - Screenshot  │   │   │
+│    │  └───────┬────────┘    └───────┬────────┘    └───────┬────────┘   │   │
+│    │          │                      │                      │            │   │
+│    │          └──────────────────────┼──────────────────────┘            │   │
+│    │                                 │                                   │   │
+│    │                                 ▼                                   │   │
+│    │                    ┌────────────────────────┐                       │   │
+│    │                    │     DOCKER VOLUMES     │                       │   │
+│    │                    │  ┌─────────────────┐  │                       │   │
+│    │                    │  │ automation_tests │  │                       │   │
+│    │                    │  │   (/data/tests) │  │                       │   │
+│    │                    │  ├─────────────────┤  │                       │   │
+│    │                    │  │   reports_data  │  │                       │   │
+│    │                    │  │(/data/reports/*)│  │                       │   │
+│    │                    │  ├─────────────────┤  │                       │   │
+│    │                    │  │  jenkins_home   │  │                       │   │
+│    │                    │  │(/var/jenkins/*) │  │                       │   │
+│    │                    │  └─────────────────┘  │                       │   │
+│    │                    └────────────────────────┘                       │   │
+│    └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+                          SECTION 2: CLOUD PROVIDER SETUP
+================================================================================
+
+-------------------------
+2.1 AWS EC2 SETUP
+-------------------------
+
+1. Launch EC2 Instance:
+   - Instance Type: t3.medium (2 vCPU, 4GB RAM) minimum
+   - OS: Ubuntu 22.04 LTS
+   - Storage: 50GB gp3
+
+2. Security Group Configuration:
+   Inbound Rules:
+   ┌─────────────────┬────────────────┬────────────────┐
+   │ Type            │ Port           │ Source         │
+   ├─────────────────┼────────────────┼────────────────┤
+   │ HTTP            │ 80            │ 0.0.0.0/0      │
+   │ HTTPS           │ 443           │ 0.0.0.0/0      │
+   │ SSH             │ 22            │ YOUR_IP/32     │
+   └─────────────────┴────────────────┴────────────────┘
+
+3. Install Docker:
+   sudo apt update
+   sudo apt install -y docker.io docker-compose
+   sudo usermod -aG docker ubuntu
+
+-------------------------
+2.2 GCP COMPUTE ENGINE
+-------------------------
+
+1. Create VM Instance:
+   - Machine Type: e2-medium (2 vCPU, 4GB)
+   - Boot Disk: Ubuntu 22.04 LTS
+   - Firewall: Allow HTTP/HTTPS
+
+2. Set up Firewall Rules:
+   gcloud compute firewall-rules create allow-http --allow tcp:80
+   gcloud compute firewall-rules create allow-https --allow tcp:443
+
+-------------------------
+2.3 DOMAIN & DNS SETUP
+-------------------------
+
+Required DNS Records:
+┌──────────────┬───────────────┬─────────────────────────────────┐
+│ Record Type  │ Name          │ Value                           │
+├──────────────┼───────────────┼─────────────────────────────────┤
+│ A            │ qa-hub        │ YOUR_VM_PUBLIC_IP               │
+│ A            │ jenkins       │ YOUR_VM_PUBLIC_IP               │
+│ CNAME        │ www           │ qa-hub.yourdomain.com           │
+└──────────────┴───────────────┴─────────────────────────────────┘
+
+================================================================================
+                          SECTION 3: CLOUD-DEPLOYMENT FILES
+================================================================================
+
+Create docker-compose.cloud.yml:
+
+version: '3.8'
+
+services:
+  nextjs:
+    build:
+      context: ./frontend
+    container_name: qahub-nextjs
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://qa-hub.yourdomain.com
+      - JENKINS_URL=http://jenkins:8080/jenkins
+      - JENKINS_USER=${JENKINS_USER}
+      - JENKINS_PASS=${JENKINS_PASS}
+      - AUTOMATION_DIR=/data/automation
+      - TARGET_APP_URL=https://hris-staging.kantorku.id/
+    volumes:
+      - automation_scripts:/data/automation
+      - reports_data:/data/reports
+    depends_on:
+      - jenkins
+    networks:
+      - qa-hub-network
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  jenkins:
+    build:
+      context: ./jenkins
+    container_name: qahub-jenkins
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - reports_data:/data/reports
+      - automation_scripts:/data/automation
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "0"
+    environment:
+      - JENKINS_OPTS=--prefix=/jenkins
+      - JENKINS_ADMIN_USERNAME=${JENKINS_USER}
+      - JENKINS_ADMIN_PASSWORD=${JENKINS_PASS}
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    networks:
+      - qa-hub-network
+
+  playwright-runner:
+    build:
+      context: ./playwright-runner
+    volumes:
+      - automation_scripts:/data/automation
+      - reports_data:/data/reports
+    networks:
+      - qa-hub-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+    restart: on-failure
+
+volumes:
+  jenkins_home:
+    driver: local
+  automation_scripts:
+    driver: local
+  reports_data:
+    driver: local
+
+networks:
+  qa-hub-network:
+    driver: bridge
+
+================================================================================
+                          SECTION 4: SSL SETUP WITH CLOUDFLARE
+================================================================================
+
+4.1 Cloudflare (Recommended - Free SSL)
+
+1. Add your domain to Cloudflare
+2. Update nameservers at your registrar
+3. Create SSL/TLS certificate:
+   - Mode: Full (strict)
+   - Edge Certificates: Free
+
+4.2 Let's Encrypt (Alternative)
+
+sudo apt install certbot
+sudo certbot certonly --standalone -d qa-hub.yourdomain.com
+sudo certbot certonly --standalone -d jenkins.yourdomain.com
+
+4.3 Nginx Reverse Proxy Configuration
+
+upstream nextjs {
+    server 127.0.0.1:3000;
+}
+
+upstream jenkins {
+    server 127.0.0.1:8080;
+}
+
+server {
+    listen 80;
+    server_name qa-hub.yourdomain.com;
+
+    location / {
+        proxy_pass http://nextjs;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+
+server {
+    listen 80;
+    server_name jenkins.yourdomain.com;
+
+    location / {
+        proxy_pass http://jenkins;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Jenkins specific headers
+        proxy_set_header X-Jenkins Sprint-Token "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 60s;
+    }
+}
+
+================================================================================
+                          SECTION 5: ENVIRONMENT VARIABLES
+================================================================================
+
+Create .env.production:
+
+# Jenkins Configuration
+JENKINS_USER=admin
+JENKINS_PASS=YourSecurePassword123!
+
+# Application URLs
+NEXT_PUBLIC_API_URL=https://qa-hub.yourdomain.com
+JENKINS_URL=http://jenkins:8080/jenkins
+TARGET_APP_URL=https://hris-staging.kantorku.id/
+
+# Security
+JWT_SECRET=your-super-secret-jwt-key-min-32-chars
+SESSION_SECRET=your-session-secret-key
+
+================================================================================
+                          SECTION 6: CLOUD STORAGE FOR REPORTS
+================================================================================
+
+6.1 AWS S3 (Recommended)
+
+1. Create S3 Bucket:
+   aws s3 mb s3://qa-hub-reports
+
+2. Update docker-compose to mount S3:
+   volumes:
+     - reports_data:/data/reports
+
+3. Use AWS CLI inside containers or S3FS for mounting
+
+6.2 GCP Cloud Storage
+
+1. Create Bucket:
+   gsutil mb -l asia-southeast1 gs://qa-hub-reports
+
+2. Mount with gcsfuse:
+   gcsfuse --implicit-dirs qa-hub-reports /data/reports
+
+6.3 Backup Strategy
+
+# Daily backup to S3
+0 2 * * * aws s3 sync /data/reports s3://qa-hub-reports/backups/$(date +\%Y\%m\%d)/
+
+================================================================================
+                          SECTION 7: MONITORING & LOGGING
+================================================================================
+
+7.1 CloudWatch (AWS) / Cloud Logging (GCP)
+
+# CloudWatch Logs Agent
+ContainerPath: /var/jenkins_home/logs
+LogGroup: /aws/ec2/qa-hub
+
+7.2 Uptime Monitoring
+
+Use UptimeRobot or Cloudflare Health Checks:
+- https://qa-hub.yourdomain.com
+- https://jenkins.yourdomain.com
+
+================================================================================
+                          SECTION 8: DEPLOYMENT STEPS
+================================================================================
+
+STEP 1: Prepare Cloud VM
+-------------------------
+ssh -i your-key.pem ubuntu@your-vm-ip
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y docker.io docker-compose git
+
+STEP 2: Clone Repository
+-------------------------
+git clone https://your-repo/qa-automation-hub.git
+cd qa-automation-hub
+
+# ALSO: Clone your automation scripts repo (see Section 13 for alternatives)
+git clone https://github.com/your-org/qa-automation-scripts.git /data/automation
+
+STEP 3: Configure Environment
+-----------------------------
+cp .env.example .env.production
+nano .env.production  # Update all values
+
+STEP 4: Update Jenkins URL in Frontend
+--------------------------------------
+Edit frontend/src/app/api/run/route.ts:
+const JENKINS_URL = process.env.JENKINS_URL || "http://jenkins:8080/jenkins";
+
+STEP 5: Build & Start Services
+------------------------------
+docker-compose -f docker-compose.cloud.yml up -d --build
+
+STEP 6: Verify Services
+-----------------------
+docker-compose -f docker-compose.cloud.yml ps
+curl -f http://localhost:3000
+curl -f http://localhost:8080/jenkins
+
+STEP 7: Configure DNS
+--------------------
+Add A records at your DNS provider:
+qa-hub.yourdomain.com -> VM_IP
+jenkins.yourdomain.com -> VM_IP
+
+STEP 8: Setup SSL (if using Nginx)
+----------------------------------
+sudo apt install nginx certbot python3-certbot-nginx
+sudo certbot --nginx -d qa-hub.yourdomain.com -d jenkins.yourdomain.com
+
+STEP 9: Update Scripts (Production)
+------------------------------------
+# For Git-based workflow (recommended):
+cd /data/automation
+git pull origin main
+
+# Or for S3 sync:
+aws s3 sync s3://your-bucket/automation/ /data/automation/
+
+================================================================================
+                          SECTION 9: CLOUD-NATIVE ALTERNATIVES
+================================================================================
+
+9.1 FRONTEND: Vercel (Recommended for Next.js)
+----------------------------------------------
+vercel deploy --prod
+- Auto-scaling
+- Global CDN
+- Free SSL
+
+Update environment:
+vercel env add JENKINS_URL
+vercel env add JENKINS_USER
+vercel env add JENKINS_PASS
+
+9.2 JENKINS: Jenkins X / GitHub Actions
+---------------------------------------
+# GitHub Actions Alternative
+name: Playwright Tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+      - run: npm ci
+      - run: npx playwright install
+      - run: npx playwright test
+
+9.3 DATABASE: Redis Cloud / PostgreSQL
+-------------------------------------
+# For run-store persistence
+REDIS_URL=rediss://your-redis-cloud:6379
+POSTGRES_URL=postgresql://user:pass@your-db:5432/qa_hub
+
+================================================================================
+                          SECTION 10: SECURITY HARDENING
+================================================================================
+
+10.1 Firewall (UFW)
+-------------------
+sudo ufw default deny incoming
+sudo ufw allow ssh from YOUR_IP
+sudo ufw allow http
+sudo ufw allow https
+sudo ufw enable
+
+10.2 Docker Security
+--------------------
+# Enable Docker daemon TLS
+dockerd --tlsverify --tlscacert=ca.pem --tlscert=server-cert.pem --tlskey=server-key.pem
+
+# Scan containers for vulnerabilities
+docker run -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image nextjs
+
+10.3 Jenkins Security
+---------------------
+1. Enable LDAP/OAuth2
+2. Configure Matrix-based security
+3. Use API tokens instead of passwords
+
+10.4 Network Isolation
+----------------------
+# Use Docker network isolation
+networks:
+  qa-hub-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+================================================================================
+                          SECTION 11: SCALING
+================================================================================
+
+11.1 Horizontal Scaling (Multiple Containers)
+----------------------------------------------
+docker-compose -f docker-compose.cloud.yml up -d --scale nextjs=3
+
+11.2 Load Balancing with Nginx
+------------------------------
+upstream qahub_backend {
+    least_conn;
+    server 127.0.0.1:3000 weight=10 max_fails=3 fail_timeout=30s;
+}
+
+11.3 Database Scaling
+--------------------
+# Use managed database with read replicas
+- AWS RDS PostgreSQL
+- GCP Cloud SQL
+- Azure Database for PostgreSQL
+
+================================================================================
+                          SECTION 12: BACKUP & DISASTER RECOVERY
+================================================================================
+
+12.1 Automated Backup Script (backup.sh)
+-----------------------------------------
+#!/bin/bash
+DATE=$(date +%Y%m%d_%H%M%S)
+BACKUP_DIR=/opt/backups
+
+# Backup Jenkins Home
+tar -czf $BACKUP_DIR/jenkins_home_$DATE.tar.gz /var/jenkins_home
+
+# Backup Reports
+tar -czf $BACKUP_DIR/reports_$DATE.tar.gz /data/reports
+
+# Upload to S3
+aws s3 cp $BACKUP_DIR/jenkins_home_$DATE.tar.gz s3://qa-hub-backups/
+aws s3 cp $BACKUP_DIR/reports_$DATE.tar.gz s3://qa-hub-backups/
+
+# Keep only last 30 days
+find $BACKUP_DIR -mtime +30 -delete
+
+12.2 Restore Procedure
+-----------------------
+# Stop services
+docker-compose -f docker-compose.cloud.yml down
+
+# Restore Jenkins
+tar -xzf /opt/backups/jenkins_home_20240101_120000.tar.gz -C /
+
+# Start services
+docker-compose -f docker-compose.cloud.yml up -d
+
+================================================================================
+                          SECTION 13: SCRIPT MANAGEMENT
+================================================================================
+
+13.1 STORAGE APPROACHES
+------------------------
+
+The QA Hub uses Docker named volumes for script storage. Here are the options:
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           SCRIPT STORAGE OPTIONS                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  OPTION           │ HOW IT WORKS              │ BEST FOR                   │
+│  ─────────────────┼──────────────────────────┼────────────────────────────│
+│  Named Volume     │ Docker manages storage    │ Production (this project)   │
+│                   │ Web upload to update      │                             │
+│  ─────────────────┼──────────────────────────┼────────────────────────────│
+│  Host Directory   │ VM folder mounted to      │ Single server deployment    │
+│                   │ container                 │                             │
+│  ─────────────────┼──────────────────────────┼────────────────────────────│
+│  Git Repository   │ Clone repo to /data/auto  │ Teams & Version Control     │
+│                   │ Pull updates on deploy     │                             │
+│  ─────────────────┼──────────────────────────┼────────────────────────────│
+│  S3/GCS Bucket   │ Sync files from cloud     │ Cloud-native workflow       │
+│                   │ storage                   │                             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+13.2 NAMED VOLUME (Current Setup - Production Ready)
+-----------------------------------------------------
+
+Current Configuration:
+- docker-compose uses: automation_scripts:/data/automation
+- Scripts stored in Docker volume (persistent)
+- Updates via: Web UI Upload OR manual sync
+
+How to Update Scripts (Production):
+
+OPTION A: Web UI Upload (Simplest)
+-----------------------------------
+1. Go to QA Hub website: https://qa-hub.yourdomain.com/scripts
+2. Click "Upload Script" button
+3. Select .spec.ts file
+4. File is added to Docker volume
+
+⚠️  Note: This creates a COPY in the volume. Local files are NOT synced.
+
+OPTION B: Volume Mount with Initial Sync (Recommended for Cloud)
+----------------------------------------------------------------
+1. On Cloud VM, create a folder:
+   sudo mkdir -p /opt/qa-automation/scripts
+
+2. Copy initial scripts from local to VM:
+   rsync -avz ./Automation-Kantorku ubuntu@your-vm:/opt/qa-automation/scripts/
+
+3. Update docker-compose.cloud.yml:
+   volumes:
+     - /opt/qa-automation/scripts:/data/automation
+
+4. To update later:
+   rsync -avz ./Automation-Kantorku ubuntu@your-vm:/opt/qa-automation/scripts/
+
+13.3 GIT-BASED WORKFLOW (Recommended for Teams)
+-----------------------------------------------
+
+Best for teams with separate development and production environments.
+
+STEP 1: Set Up Git Repository
+------------------------------
+# On your LOCAL machine:
+cd /path/to/Automation-Kantorku
+git init
+git add .
+git commit -m "Initial automation scripts"
+
+# Push to GitHub/GitLab:
+git remote add origin https://github.com/your-org/qa-automation-scripts.git
+git push -u origin main
+
+STEP 2: On Cloud VM - Clone or Pull Scripts
+--------------------------------------------
+# Option A: Clone fresh (initial deployment)
+git clone https://github.com/your-org/qa-automation-scripts.git /data/automation
+
+# Option B: Pull updates (when scripts change)
+cd /data/automation && git pull origin main
+
+STEP 3: Automate with Jenkins Pre-Build Step
+---------------------------------------------
+# Modify Jenkins job to pull before running:
+# Add to shell command in init.groovy:
+'''
+cd /data/automation && git pull origin main || true
+
+docker run --rm --network webqa_qa-hub-network \
+  -v webqa_automation_scripts:/data/automation \
+  ...
+'''
+
+STEP 4: Developer Workflow
+--------------------------
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GIT-BASED DEVELOPMENT WORKFLOW                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. DEVELOPER edits locally in /Automation Kantorku                         │
+│  2. Tests with bind mount (docker-compose.local.yml)                        │
+│  3. Commit & push to GitHub:                                                │
+│     git add . && git commit -m "Update course-crud test"                   │
+│     git push origin main                                                     │
+│  4. CLOUD VM pulls latest:                                                   │
+│     cd /data/automation && git pull origin main                             │
+│  5. Jenkins runs tests with updated scripts                                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+13.4 S3/GCS SYNC WORKFLOW
+---------------------------
+
+For AWS/GCP cloud environments with object storage.
+
+STEP 1: Upload Scripts to S3
+-----------------------------
+# From LOCAL machine:
+aws s3 sync ./Automation-Kantorku s3://your-bucket/qa-scripts/ \
+  --exclude "node_modules/*" \
+  --exclude ".git/*"
+
+# Or with GCP:
+gsutil -m rsync -r ./Automation-Kantorku gs://your-bucket/qa-scripts/
+
+STEP 2: VM Pulls from S3
+-------------------------
+# Option A: Sync before each test run (in Jenkins pre-build):
+aws s3 sync s3://your-bucket/qa-scripts/ /data/automation/
+
+# Option B: Mount with s3fs (persistent):
+sudo apt install s3fs
+echo "bucket:access-key:secret-key" | sudo tee /etc/passwd-s3fs
+sudo chmod 600 /etc/passwd-s3fs
+s3fs your-bucket /data/automation -o allow_other
+
+STEP 3: Update Scripts
+------------------------
+# Simply re-upload local folder to S3:
+aws s3 sync ./Automation-Kantorku s3://your-bucket/qa-scripts/ --delete
+
+13.5 QUICK REFERENCE: WHICH METHOD TO USE?
+-------------------------------------------
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         CHOOSING THE RIGHT METHOD                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  SCENARIO                          RECOMMENDED METHOD                        │
+│  ──────────────────────────────────────────────────────────────────────────│
+│                                                                             │
+│  Solo development, local only   Bind mount (auto-sync)                      │
+│                                                                             │
+│  Solo, but deployed to cloud    Named volume + Web UI upload                │
+│                                                                             │
+│  Team, shared scripts           Git workflow (GitHub/GitLab)                 │
+│                                                                             │
+│  Enterprise, AWS infrastructure  S3 sync                                     │
+│                                                                             │
+│  Enterprise, GCP infrastructure GCS sync                                     │
+│                                                                             │
+│  Multiple environments          Git + Jenkins pipeline                       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+13.6 TROUBLESHOOTING SCRIPT SYNC ISSUES
+----------------------------------------
+
+PROBLEM: Scripts not updating in production
+SOLUTION:
+1. Check if volume is correctly mounted: docker exec <container> ls /data/automation
+2. For Git: Verify git remote and branch: cd /data/automation && git status
+3. For S3: Check AWS credentials and bucket permissions
+4. For Web Upload: Verify file was uploaded (check file listing in UI)
+
+PROBLEM: Duplicate scripts appearing in listing
+SOLUTION:
+1. Web upload creates copies - don't upload the same file twice
+2. Delete duplicates: docker exec <container> rm /data/automation/tests/duplicate.spec.ts
+3. Use Git workflow to avoid duplicates
+
+PROBLEM: "Script not found" error when running
+SOLUTION:
+1. Verify SCRIPT_PATH parameter is correct (e.g., "learning-course/course-crud.spec.ts")
+2. Check file exists: docker exec <container> test -f /data/automation/tests/${SCRIPT_PATH}
+3. Ensure no typos in path (case-sensitive on Linux)
+
+================================================================================
+                          SECTION 14: TROUBLESHOOTING
+================================================================================
+
+COMMON ISSUES & SOLUTIONS:
+
+1. Jenkins Build Not Triggering
+   - Check crumb authentication: GET /jenkins/crumbIssuer/api/json
+   - Verify JSESSIONID cookie is sent
+   - Check Jenkins logs: docker logs qahub-jenkins
+
+2. Next.js Can't Reach Jenkins
+   - Verify both in same Docker network
+   - Check JENKINS_URL environment variable
+   - Test network: docker exec qahub-nextjs ping jenkins
+
+3. Report Page Blank
+   - Check iframe sandbox settings
+   - Verify clipboard polyfill is injected
+   - Check browser console for errors
+
+4. Playwright Tests Failing
+   - Check SCRIPT_PATH exists in volume
+   - Verify BROWSER environment variable
+   - Check BASE_URL is accessible from runner
+
+5. SSL Certificate Issues
+   - Verify DNS is pointing to correct IP
+   - Check Cloudflare SSL mode (Full strict)
+   - Renew certbot: sudo certbot renew
+
+================================================================================
+                          SECTION 15: QUICK REFERENCE
+================================================================================
+
+COMMANDS:
+---------
+# Start services
+docker-compose -f docker-compose.cloud.yml up -d
+
+# View logs
+docker-compose -f docker-compose.cloud.yml logs -f
+
+# Restart services
+docker-compose -f docker-compose.cloud.yml restart
+
+# Stop services
+docker-compose -f docker-compose.cloud.yml down
+
+# Scale Next.js
+docker-compose -f docker-compose.cloud.yml up -d --scale nextjs=3
+
+# Backup
+./backup.sh
+
+# Restore
+./restore.sh backup_20240101_120000
+
+# Update scripts (Git workflow)
+cd /data/automation && git pull origin main
+
+# Sync scripts from S3
+aws s3 sync s3://your-bucket/automation/ /data/automation/
+
+URLS (After Deployment):
+-----------------------
+QA Hub Frontend:  https://qa-hub.yourdomain.com
+Jenkins UI:       https://jenkins.yourdomain.com/jenkins
+API Endpoint:     https://qa-hub.yourdomain.com/api/run
+
+================================================================================
+                          END OF DOCUMENT
+================================================================================
+
+Created: 2026-04-30
+Version: 1.2
+For: QA Automation Hub Cloud Deployment
+
+Changelog:
+- v1.2: Complete rewrite Section 13 - Script Management with clearer workflows,
+        practical examples, troubleshooting, and decision guide for choosing
+        the right sync method (Volume/Git/S3)
+- v1.1: Added Section 13 - Script Management (Git/S3/Volume workflows)
+- v1.0: Initial release

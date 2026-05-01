@@ -1,0 +1,260 @@
+==============================================================
+PROJECT PLAN: QA AUTOMATION HUB
+Revised: 2026-04-29
+==============================================================
+
+
+1. OVERVIEW
+-----------
+Web dashboard internal untuk tim QA — jalankan script automation
+Playwright langsung dari browser tanpa perlu buka terminal.
+
+Status saat ini: LOKAL, berjalan di mesin developer.
+Target berikutnya: hosted di server/VPS agar bisa diakses tim.
+
+
+2. ARSITEKTUR SAAT INI (AKTUAL)
+--------------------------------
+Layer          | Teknologi
+---------------|--------------------------------------------------
+Frontend       | Next.js 16 (App Router) + TailwindCSS v4 + Shadcn
+API            | Next.js Route Handlers (bagian dari frontend)
+Execution      | Node.js child_process.spawn (langsung dari server)
+Log Streaming  | Server-Sent Events (SSE) via ReadableStream
+Storage        | In-memory (Map) — hilang saat server restart
+Script Files   | Filesystem lokal (Automation Kantorku/tests/)
+Auth           | Tidak ada (sengaja di-skip untuk fase ini)
+Database       | Tidak ada
+
+Tools yang dipakai saat runtime:
+  - npx playwright test  → executor script
+  - Chromium             → browser (via Playwright)
+  - --reporter=list      → output real-time ke stdout
+
+
+3. ARSITEKTUR TARGET (HOSTED)
+------------------------------
+Layer          | Teknologi
+---------------|--------------------------------------------------
+Frontend       | Next.js (sama, deploy ke VPS)
+Backend        | FastAPI (Python) — opsional, bisa tetap Next.js API
+Database       | SQLite (cukup untuk tim kecil) atau PostgreSQL
+Auth           | Session sederhana atau JWT
+Execution      | Langsung child_process ATAU Jenkins (opsional)
+Log Streaming  | SSE (sama)
+Script Storage | Filesystem di server atau Git repo
+Reports        | Allure (generate setelah run selesai)
+Infra          | VPS + Nginx reverse proxy
+SSL            | Let's Encrypt (certbot)
+
+
+4. FITUR — STATUS IMPLEMENTASI
+--------------------------------
+
+[DONE] Halaman Scripts (/scripts)
+  - Load daftar script nyata dari filesystem
+  - Grouped per subfolder
+  - Search/filter by nama atau folder
+  - Tombol Run per script
+
+[DONE] Eksekusi Script
+  - POST /api/run → spawn npx playwright test
+  - Proses berjalan di background
+  - Return runId untuk tracking
+
+[DONE] Live Log Viewer (/run/[runId])
+  - SSE stream log real-time
+  - Color coding per tipe log
+  - Status badge otomatis (running/passed/failed/aborted)
+  - Timer elapsed
+  - Tombol Abort (kill proses)
+
+[DONE] API Routes
+  - GET  /api/scripts        → list .spec.ts dari filesystem
+  - POST /api/run            → spawn playwright
+  - DELETE /api/run          → abort (kill process)
+  - GET  /api/logs/[runId]   → SSE stream
+
+[PARTIAL] Dashboard (/dashboard)
+  - Ada, tapi hanya shortcut ke Scripts dan History
+  - Belum ada data nyata (stats, recent runs)
+
+[PARTIAL] History (/history)
+  - Tabel ada, data masih hardcoded/statis
+  - Belum tersambung ke run nyata
+
+[NOT DONE] Database / Persistensi
+  - Run history hilang saat server restart
+  - Belum ada penyimpanan apapun
+
+[NOT DONE] Auth
+  - Semua halaman bisa diakses siapapun
+  - Ditunda sampai mau hosting
+
+[NOT DONE] Allure Report
+  - Tombol ada di run page, tapi link belum terhubung
+  - Playwright sudah generate HTML report di playwright-report/
+    tapi belum di-serve ke browser
+
+[NOT DONE] Upload Script dari Browser
+  - UI dropzone sudah ada tapi belum simpan ke filesystem
+
+[NOT DONE] Notifikasi (Email/Slack)
+[NOT DONE] Scheduler (cron)
+[NOT DONE] Script Editor (Monaco)
+
+
+5. TODO LIST — PRIORITAS
+--------------------------
+
+== FASE A: LOKAL LENGKAP ==
+(selesaikan ini sebelum hosting)
+
+[ ] A1. Simpan run history ke file JSON atau SQLite
+        Setiap run selesai → tulis ke db/history.json atau SQLite
+        History page baca dari sana → data nyata
+        Library: better-sqlite3 (Node.js, zero setup)
+
+[ ] A2. Serve Allure Report
+        Setelah run selesai, jalankan: npx allure generate
+        Simpan output ke public/allure/[runId]/
+        Tombol "Allure Report" link ke /allure/[runId]/index.html
+
+[ ] A3. Upload script dari browser ke filesystem
+        POST /api/scripts/upload → simpan file ke tests/
+        Validasi ekstensi .spec.ts saja
+        Refresh daftar script otomatis
+
+[ ] A4. Pilih browser/environment sebelum run
+        Tambah modal/dropdown di scripts page sebelum trigger run
+        Browser: chromium / firefox / webkit
+        Env: staging / production (set BASE_URL via env var)
+
+[ ] A5. Pindah hardcoded path ke .env.local
+        AUTOMATION_DIR=C:\Users\faishaltsq\Documents\...\Automation Kantorku
+        Baca via process.env.AUTOMATION_DIR di semua API routes
+
+[ ] A6. Dashboard dengan data nyata
+        Baca dari history (A1) → hitung total/passed/failed
+        Tampilkan recent 5 runs
+
+== FASE B: HOSTING ==
+(lakukan setelah Fase A selesai dan stabil)
+
+[ ] B1. Pilih VPS
+        Minimum: 2 CPU, 4GB RAM (untuk Playwright + Chromium)
+        Rekomendasi: Ubuntu 22.04
+
+[ ] B2. Install dependencies di server
+        Node.js 20+
+        Playwright + browser: npx playwright install chromium
+        PM2 untuk keep Next.js running: npm install -g pm2
+
+[ ] B3. Setup Nginx reverse proxy
+        / → Next.js :3000
+        Blokir akses langsung ke port 3000 dari luar
+
+[ ] B4. SSL dengan Let's Encrypt
+        certbot --nginx -d yourdomain.com
+
+[ ] B5. Setup .env di server
+        AUTOMATION_DIR=/path/to/scripts
+        NODE_ENV=production
+
+[ ] B6. Deploy pipeline
+        Opsi sederhana: git pull + pm2 restart
+        Opsi lebih baik: GitHub Actions → SSH ke server → deploy
+
+[ ] B7. Tambah Auth sederhana
+        Minimal: satu password env var (HTTP Basic Auth via Nginx)
+        Atau: Next.js middleware + session cookie + satu user hardcoded
+        JWT + multi-user bisa nanti
+
+== FASE C: PRODUCTION-READY ==
+(nice to have, tambah kalau sudah stabil)
+
+[ ] C1. Multi-user & role
+        User: Admin / QA / Viewer
+        Admin: bisa hapus script, lihat semua history
+        QA: bisa run script
+        Viewer: read-only
+
+[ ] C2. Notifikasi Slack
+        Setelah run selesai → POST ke Slack webhook
+        Format: script name, status, duration, link ke Allure
+
+[ ] C3. Scheduler
+        Jalankan script otomatis di waktu tertentu (cron)
+        Library: node-cron
+
+[ ] C4. Script Editor di browser
+        Monaco Editor (sudah install: @monaco-editor/react)
+        Buka file, edit, simpan langsung ke filesystem
+
+[ ] C5. Parallel run
+        Sekarang hanya bisa 1 script sekaligus
+        Tambah worker pool untuk jalankan beberapa script paralel
+
+[ ] C6. Jenkins integration (opsional)
+        Kalau butuh lebih canggih (nodes, agent, queue)
+        Ganti child_process dengan Jenkins REST API
+        Tapi untuk tim kecil, child_process sudah cukup
+
+
+6. STRUKTUR FOLDER (SEKARANG)
+------------------------------
+frontend/
+  src/
+    app/
+      (dashboard)/
+        dashboard/page.tsx     ← shortcut page
+        history/page.tsx       ← statis, belum nyata
+        scripts/page.tsx       ← FUNCTIONAL
+        run/[build_id]/page.tsx← FUNCTIONAL (SSE)
+      api/
+        scripts/route.ts       ← list scripts
+        run/route.ts           ← spawn + abort
+        logs/[runId]/route.ts  ← SSE stream
+    components/
+      layout/AppLayout.tsx     ← sidebar (3 menu)
+      upload/UploadDropzone.tsx← UI ada, belum terhubung
+    lib/
+      run-store.ts             ← in-memory process store
+      utils.ts
+
+Automation Kantorku/
+  playwright.config.ts
+  tests/
+    auth.setup.ts              ← login setup (jalan otomatis)
+    dashboard.spec.ts
+    learning-course/*.spec.ts  ← 11 files
+    okr/*.spec.ts              ← multiple files
+  auth/user.json               ← session state Playwright
+
+
+7. CARA TAMBAH SCRIPT BARU
+----------------------------
+Cukup taruh file .spec.ts di:
+  Automation Kantorku\tests\         (flat)
+  Automation Kantorku\tests\<folder> (dalam subfolder)
+
+Refresh halaman /scripts → langsung muncul.
+Tidak perlu ubah kode apapun.
+
+
+8. CATATAN PENTING
+-------------------
+- slowMo: 800 di playwright.config.ts → tiap action ~0.8 detik
+  Normal, by design. Bukan bug.
+
+- auth.setup.ts jalan otomatis sebelum test chromium
+  (via dependencies: ['setup'] di config)
+  Butuh BASE_URL dan kredensial yang valid di .env
+
+- Run history hilang kalau server restart (in-memory)
+  Fix ini di A1.
+
+- Hardcoded path di api/scripts/route.ts dan api/run/route.ts
+  Pindah ke .env.local sebelum hosting (A5)
+
+==============================================================
