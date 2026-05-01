@@ -55,7 +55,7 @@ cp frontend/.env.example frontend/.env.local
 
 Atur variabel yang diperlukan:
 ```env
-TARGET_APP_URL=https://hris-staging.kantorku.id/
+TARGET_APP_URL=https://your-app-staging.example.com/
 AUTOMATION_DIR=/path/to/your/automation/scripts
 ```
 
